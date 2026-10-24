@@ -60,12 +60,15 @@ individually — see `runOnStartup`, `runOnProfileChange`,
         "runOnCurrentProfileSave": true,
         "runOnParentProfileSave": true,
         "inheritExtensions": true,
+        "inheritMcp": true,
         "showMessages": false
     }
 }
 ```
 
 > **Note**: Set `inheritExtensions` to `false` if you only want to inherit settings and not extensions from your parent profiles.
+
+> **Note**: Set `inheritMcp` to `false` if you don't want to inherit MCP servers (`mcp.json`) from your parent profiles.
 
 > **Note**: Set `runOnCurrentProfileSave` to `false` if you don't want inheritance to be re-applied automatically whenever you edit and save the current profile's `settings.json`.
 
@@ -200,6 +203,16 @@ Unless disabled via `inheritExtensions`, the extension performs a similar proces
 - Newly inherited extensions are tagged with a `metadata.inheritedFromProfile` field, so the extension can tell them apart from extensions you installed directly into the current profile.
 
 > **Note**: Setting `inheritExtensions` to `false` only stops *new* extensions from being inherited going forward — it does not remove extensions that were already inherited previously. Run the `Remove Inherited Settings (Current Profile)` command to strip both the inherited settings block and any previously inherited extensions from the current profile.
+
+### 5: Inheriting MCP Servers
+
+Unless disabled via `inheritMcp`, the extension also inherits MCP servers from each parent profile's `mcp.json`:
+
+- Any MCP server already declared by the current profile always wins, so it is never overridden by an inherited one.
+- If more than one parent profile declares the same server, the last parent profile to declare it (in `inheritProfile.parents` order) wins.
+- Inherited servers are written into the current profile's `mcp.json` inside an inherited marker block, so the extension can tell them apart from servers you configured directly.
+
+> **Note**: MCP inheritance only applies to the **profile-level** `mcp.json` (`<user>/profiles/<id>/mcp.json`). Workspace-level MCP config (`.vscode/mcp.json` / `.mcp.json`) is shared by all profiles and takes precedence over profile-level servers, so it is not part of inheritance.
 
 ---
 
