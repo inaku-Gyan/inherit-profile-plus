@@ -170,6 +170,102 @@ suite("Extension integration", () => {
     }
   });
 
+  test("inherits MCP servers from parent profiles (strategy A)", async () => {
+    const currentProfile: ProfileDescriptor = {
+      name: "Child",
+      location: "child-profile",
+    };
+    const parentProfile: ProfileDescriptor = {
+      name: "Parent",
+      location: "parent-profile",
+    };
+
+    await writeStorage(sandboxRoot, currentProfile, [parentProfile]);
+    await writeProfileSettings(sandboxRoot, undefined, "{\n}\n");
+    await writeProfileSettings(sandboxRoot, parentProfile, "{\n}\n");
+    await writeProfileSettings(sandboxRoot, currentProfile, "{\n}\n");
+
+    // 父级：git-mcp + firefox-devtools
+    await writeProfileMcp(sandboxRoot, parentProfile, {
+      "git-mcp": { command: "npx", args: ["-y", "@git/mcp"] },
+      "firefox-devtools": { command: "npx", args: ["-y", "@mozilla/firefox-devtools-mcp"] },
+    });
+    // 子级 own：ida-pro-mcp + 同名 firefox-devtools（子级赢）
+    await writeProfileMcp(sandboxRoot, currentProfile, {
+      "ida-pro-mcp": { command: "uvx", args: ["ida-pro-mcp"] },
+      "firefox-devtools": {
+        command: "npx",
+        args: ["-y", "@mozilla/firefox-devtools-mcp", "--marionette-port", "2828"],
+      },
+    });
+
+    await updateConfig("parents", ["Parent"]);
+    await updateCurrentProfileInheritance(createContext(sandboxRoot));
+
+    const servers = await readProfileMcp(sandboxRoot, currentProfile);
+
+    // 父级有、子级没有 → 继承
+    assert.ok(servers["git-mcp"], "git-mcp 应被继承");
+    // 子级 own 保留
+    assert.ok(servers["ida-pro-mcp"], "ida-pro-mcp 应保留");
+    // 同名 → 子级赢（带 --marionette-port）
+    assert.deepStrictEqual(servers["firefox-devtools"].args, [
+      "-y",
+      "@mozilla/firefox-devtools-mcp",
+      "--marionette-port",
+      "2828",
+    ]);
+
+    // 继承块标记存在
+    const mcpRaw = await fs.readFile(
+      path.join(getProfileDirectory(sandboxRoot, currentProfile), "mcp.json"),
+      "utf8",
+    );
+    assert.ok(mcpRaw.includes(INHERITED_SETTINGS_START_MARKER));
+    assert.ok(mcpRaw.includes(INHERITED_SETTINGS_END_MARKER));
+  });
+
+  test("removes inherited MCP servers from the current profile", async () => {
+    const currentProfile: ProfileDescriptor = {
+      name: "Child",
+      location: "child-profile",
+    };
+
+    await writeStorage(sandboxRoot, currentProfile);
+    await writeProfileSettings(sandboxRoot, currentProfile, "{\n}\n");
+    await writeProfileMcp(sandboxRoot, currentProfile, {
+      "own-server": { command: "npx" },
+    });
+
+    // 手动写入一个继承块
+    const mcpPath = path.join(
+      getProfileDirectory(sandboxRoot, currentProfile),
+      "mcp.json",
+    );
+    await fs.writeFile(
+      mcpPath,
+      `{
+  "servers": {
+    "own-server": { "command": "npx" },
+    ${INHERITED_SETTINGS_START_MARKER}
+    "inherited-server": { "command": "uvx" },
+    ${INHERITED_SETTINGS_END_MARKER}
+  }
+}
+`,
+      "utf8",
+    );
+
+    await removeCurrentProfileInheritedSettings(createContext(sandboxRoot));
+
+    const servers = await readProfileMcp(sandboxRoot, currentProfile);
+    assert.ok(servers["own-server"], "own server 应保留");
+    assert.ok(!servers["inherited-server"], "inherited server 应被移除");
+
+    const mcpRaw = await fs.readFile(mcpPath, "utf8");
+    assert.ok(!mcpRaw.includes(INHERITED_SETTINGS_START_MARKER));
+  });
+
   test("removes managed settings and inherited extensions from the current profile", async () => {
     const currentProfile: ProfileDescriptor = {
       name: "Child",
@@ -1115,6 +1211,32 @@ async function writeProfileExtensions(
     JSON.stringify(extensions, null, 4) + "\n",
     "utf8",
   );
+}
+
+/** 写入 Profile 的 mcp.json（servers map）。 */
+async function writeProfileMcp(
+  rootDir: string,
+  profile: ProfileDescriptor | undefined,
+  servers: Record<string, unknown>,
+): Promise<void> {
+  const profileDirectory = getProfileDirectory(rootDir, profile);
+  await fs.mkdir(profileDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(profileDirectory, "mcp.json"),
+    JSON.stringify({ servers }, null, 2) + "\n",
+    "utf8",
+  );
+}
+
+/** 读取 Profile 的 mcp.json 并解析为 servers map。 */
+async function readProfileMcp(
+  rootDir: string,
+  profile: ProfileDescriptor | undefined,
+): Promise<Record<string, any>> {
+  const mcpPath = path.join(getProfileDirectory(rootDir, profile), "mcp.json");
+  const raw = await fs.readFile(mcpPath, "utf8");
+  const parsed = parse(raw) as Record<string, any>;
+  return parsed?.servers ?? {};
 }
 
 /**

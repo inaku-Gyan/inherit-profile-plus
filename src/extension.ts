@@ -259,6 +259,7 @@ const INHERIT_PROFILE_SYNC_KEYS = [
   "inheritProfile.parents",
   "inheritProfile._originallyOwnExtensions",
   "inheritProfile.optedOutExtensions",
+  "inheritProfile._optedOutMcpServers",
 ] as const;
 
 async function ensureIgnoredSettings(

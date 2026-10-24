@@ -73,7 +73,11 @@ VS Code 源码确认：
 
 ## 三、MCP 继承（inherit-profile 插件）≠ 云同步
 
-| | MCP 继承（待实现功能） | MCP 云同步（VS Code 原生） |
+> **状态**：✅ **已实现**（2026-10-23）。设计文档见 `.copilot/instructions/MCP继承设计.instructions.md`。
+> **决策**：冲突策略 A（子级整体覆盖）；多父级合并后者覆盖前者。
+> **开关**：`inheritProfile.inheritMcp`（默认 `true`）。
+
+| | MCP 继承（已实现） | MCP 云同步（VS Code 原生） |
 |---|---|---|
 | 方向 | 父 Profile → 子 Profile（同机） | 本机 → 云端 → 其他机器（同 Profile） |
 | 解决什么问题 | Base 配了 MCP，Dev/Writing 自动继承 | 换机器后配置不丢失 |

@@ -34,6 +34,7 @@ import * as fs from "fs";
 import { createDebouncedTrigger } from "./debounce";
 import type { DebouncedTrigger } from "./debounce";
 import { resolveParentSettingsPaths, resolveParentExtensionsPaths } from "./profileSettings";
+import { resolveParentMcpPaths } from "./mcpInheritance";
 import { getCurrentProfileDetails, getGlobalStoragePath, getProfileMap, isManagedFileSelfWrite, readRawSettingsFile, reconcileAllProfiles, getParentNamesFromProfile, invalidateInheritanceGraph } from "./profiles";
 
 /**
@@ -238,13 +239,17 @@ export async function registerParentProfileSaveWatcher(
       return;
     }
 
-    // --- 新增: extensions.json 路径解析 ---
+    // --- 新增: extensions.json / mcp.json 路径解析 ---
     const parentExtensionsPaths = resolveParentExtensionsPaths(
       parentProfileNames,
       profiles,
     );
+    const parentMcpPaths = resolveParentMcpPaths(
+      parentProfileNames,
+      profiles,
+    );
 
-    // 统一监听 settings.json + extensions.json, 带 debounce
+    // 统一监听 settings.json + extensions.json + mcp.json, 带 debounce
     // 复用函数级的 scheduleReapply, 仅 dispose 旧的、重创一个新的
     // 以便 reset debounce timer 并绑定新的 pendingTriggerProfile 闭包
     // ⚠️ 注意: 只做 reassign (无 let 或 const), 不重复声明, 避免遮蔽
@@ -257,7 +262,11 @@ export async function registerParentProfileSaveWatcher(
       parentProfileNames,
       profiles,
     );
-    const allParentPaths = [...parentSettingsPaths, ...parentExtensionsPaths];
+    const allParentPaths = [
+      ...parentSettingsPaths,
+      ...parentExtensionsPaths,
+      ...parentMcpPaths,
+    ];
 
     for (const parentPath of allParentPaths) {
       // 从路径反查 profile 名

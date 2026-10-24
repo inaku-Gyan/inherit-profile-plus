@@ -83,6 +83,18 @@ import { parse as parseJSONC } from "jsonc-parser";
 import { getDisabledExtensions } from "./disabledExtensions";
 import { writeFileAtomic } from "./atomicWrite";
 import {
+  buildInheritedMcpBlock,
+  hasInheritedMcpMarkers,
+  insertMcpBlockBeforeClose,
+  isMcpDocument,
+  readMcpServers,
+  readOwnMcpServers,
+  readRawMcpFile,
+  stripInheritedMcpBlocks,
+  subtractMcpServers,
+  type McpServerConfig,
+} from "./mcpInheritance";
+import {
   buildInheritedSettingsBlock,
   findTabValue,
   flattenSettings,
@@ -1245,6 +1257,157 @@ export async function readRawSettingsFile(
   }
 }
 
+// ---------------------------------------------------------------------------
+// MCP 服务器继承
+// ---------------------------------------------------------------------------
+
+/**
+ * 应用 MCP 服务器继承到指定 Profile。
+ *
+ * 冲突策略 A（子级整体覆盖）:
+ *   - 父级有、子级 own 没有的 server → 整体继承
+ *   - 子级 own 有同名 server → 整个 server 不继承，子级配置完全生效（父级不覆盖）
+ *   - 子级 own 有、父级没有的 server → 保留子级 own（不清理）
+ *   - 多父级同名 server → 后者覆盖前者（按 parents 数组顺序）
+ *
+ * 流程:
+ *   1. 读父级 mcp.json 的 servers（合并所有父级，后者覆盖前者）
+ *   2. 读子级 own servers（剥离继承块 + 剔除 optedOut）
+ *   3. subtractMcpServers(父级, 子级own) → 应继承的
+ *   4. 删除旧继承块
+ *   5. 写新继承块
+ *   6. 回写 _originallyOwnMcpServers / _optedOutMcpServers 到 settings.json
+ *
+ * @param context Extension context。
+ * @param profileName 目标 Profile 名。
+ * @param profileDir 目标 Profile 目录。
+ * @param profiles Profile 名 → 目录映射。
+ * @param parentNames 父 Profile 名列表。
+ */
+async function applyInheritedMcp(
+  context: vscode.ExtensionContext,
+  profileName: string,
+  profileDir: string,
+  profiles: Record<string, string>,
+  parentNames: string[],
+): Promise<void> {
+  const mcpPath = path.join(profileDir, "mcp.json");
+
+  // 1. 读父级 mcp.json 的 servers（合并所有父级，后者覆盖前者）
+  const parentServers: Record<string, McpServerConfig> = {};
+  for (const parentName of parentNames) {
+    const parentDir = profiles[parentName];
+    if (!parentDir) continue;
+    const servers = await readMcpServers(path.join(parentDir, "mcp.json"));
+    Object.assign(parentServers, servers); // 后者覆盖前者
+  }
+
+  // 2. 读子级 own servers（剥离继承块）
+  const settings = (await readJSON(path.join(profileDir, "settings.json"))) ?? {};
+  const optedOutServers: string[] =
+    settings?.inheritProfile?._optedOutMcpServers ??
+    settings?.["inheritProfile._optedOutMcpServers"] ??
+    [];
+  const ownServers = await readOwnMcpServers(mcpPath);
+
+  // 3. 差集：父级有、子级 own 没有的 server
+  // ⚠️ opt-out 的 server 必须视为"子级已有"——否则 subtractMcpServers 会认为
+  // 子级没有它而重新继承回来，opt-out 完全失效。这里把 optedOut 名字并入
+  // own 集合参与差集计算（只用于差集，不写回文件）。
+  const ownOrOptedOut: Record<string, McpServerConfig> = { ...ownServers };
+  for (const name of optedOutServers) {
+    if (!(name in ownOrOptedOut)) {
+      ownOrOptedOut[name] = {} as McpServerConfig;
+    }
+  }
+  const inheritedServers = subtractMcpServers(parentServers, ownOrOptedOut);
+  const totalInherited = Object.keys(inheritedServers).length;
+  console.info(
+    `[mcp-inheritance] Found ${totalInherited} inherited MCP server(s) for \`${profileName}\`.`,
+  );
+
+  // 4. 删除旧继承块
+  const raw = await readRawMcpFile(mcpPath);
+  const { cleaned, removedCount } = stripInheritedMcpBlocks(raw);
+
+  // 防御：声明了父级却算不出任何 server，且文件有僵尸标记块 → 清理自愈
+  if (parentNames.length > 0 && totalInherited === 0) {
+    if (hasInheritedMcpMarkers(raw)) {
+      console.warn(
+        `[mcp-inheritance] No inheritable MCP server for \`${profileName}\` ` +
+          `but inherited marker block(s) present; removing them to self-heal. ` +
+          `No new block written.`,
+      );
+      await writeManagedFile(mcpPath, cleaned + "\n");
+    } else {
+      console.warn(
+        `[mcp-inheritance] Skipping MCP removal for \`${profileName}\`: parent ` +
+          `profile(s) declared but no inheritable server resolved and no marker ` +
+          `block present. Keeping file to avoid data loss.`,
+      );
+    }
+    return;
+  }
+
+  // 5. 写新继承块
+  if (totalInherited > 0) {
+    const tab = findTabValue(cleaned);
+    const block = buildInheritedMcpBlock(inheritedServers, tab);
+    const merged = insertMcpBlockBeforeClose(cleaned, block);
+    if (merged === null || !isMcpDocument(merged)) {
+      console.warn(
+        `[mcp-inheritance] Refusing to write inherited MCP servers to ` +
+          `\`${mcpPath}\`: merged result is not a valid mcp.json object. ` +
+          `Skipping write.`,
+      );
+      return;
+    }
+    await writeManagedFile(mcpPath, merged);
+  } else if (removedCount > 0) {
+    // 有旧块但无新继承 → 只清理旧块
+    await writeManagedFile(mcpPath, cleaned + "\n");
+  }
+
+  // 6. 回写 _optedOutMcpServers 到 settings.json（扁平 key，防 Settings Sync 节点锁定）
+  //
+  // ⚠️ 不写 _originallyOwnMcpServers：冲突策略 A 下"子级 own 永不覆盖"，
+  // 台账无需记录 own 列表（与扩展继承不同——扩展需要它判断"原本 own 但被
+  // 父级接管"）。写一个只写不读的数组只会无意义地修改 settings.json、
+  // 触发文件 watcher。若未来演进到策略 B/C 再引入。
+  if (optedOutServers.length > 0) {
+    const settingsPath = path.join(profileDir, "settings.json");
+    const rawSettings = await readRawSettingsFile(settingsPath);
+    const { modify, applyEdits } = await import("jsonc-parser");
+    const options: import("jsonc-parser").ModificationOptions = {
+      formattingOptions: { insertSpaces: true, tabSize: 4 },
+    };
+    const parsedSettings = parseJSONC(rawSettings) as Record<string, any>;
+    let updated = rawSettings;
+    if (parsedSettings?.inheritProfile) {
+      // 先删旧嵌套残留，再写扁平 key
+      updated = applyEdits(
+        rawSettings,
+        modify(
+          rawSettings,
+          ["inheritProfile", "_optedOutMcpServers"],
+          undefined,
+          options,
+        ),
+      );
+    }
+    updated = applyEdits(
+      updated,
+      modify(
+        updated,
+        ["inheritProfile._optedOutMcpServers"],
+        optedOutServers,
+        options,
+      ),
+    );
+    await writeManagedFile(settingsPath, updated);
+  }
+}
+
 /**
  * Applies the inherited settings to the current profile.
  * @param context Extension context.
@@ -1293,6 +1456,21 @@ async function applyInheritedSettings(
   // 等异常）→ 不写回新块，避免"只删不写"造成块永久丢失。
   // ⚠️ issue #4：即便继承设置为空，若文件里**实际存在**继承标记块（历史 bug
   // 残留的僵尸块），仍应先清理让文件自愈，只是不写回新块。
+  //
+  // ⚠️ MCP 继承必须在此分支**之前**执行：父级可能只配了 MCP 而没有可继承的
+  // settings（如父级 settings.json 为空、仅 mcp.json 有 server）。若放在
+  // 提前 return 之后，MCP 继承会被整体跳过（集成测试实测）。
+  const config = vscode.workspace.getConfiguration("inheritProfile");
+  if (config.get<boolean>("inheritMcp", true)) {
+    await applyInheritedMcp(
+      context,
+      currentProfileName,
+      currentProfileDirectory,
+      profiles,
+      parentProfiles,
+    );
+  }
+
   if (parentProfiles.length > 0 && totalInheritedSettings === 0) {
     const raw = await readRawSettingsFile(currentProfilePath);
     if (hasInheritedMarkers(raw)) {
@@ -1323,7 +1501,6 @@ async function applyInheritedSettings(
     await writeInheritedSettings(currentProfilePath, inheritedSettings);
   }
 
-  const config = vscode.workspace.getConfiguration("inheritProfile");
   if (!config.get<boolean>("inheritExtensions", true)) {
     console.info("Extension inheritance is disabled, skipping extensions.");
     return;
@@ -1844,8 +2021,19 @@ async function syncProfileByName(
     }
   }
 
-  // 2. 扩展继承
+  // 1.5 MCP 服务器继承（设置继承之后、扩展继承之前）
   const config = vscode.workspace.getConfiguration("inheritProfile");
+  if (config.get<boolean>("inheritMcp", true)) {
+    await applyInheritedMcp(
+      context,
+      profileName,
+      profileDir,
+      profiles,
+      parentNames,
+    );
+  }
+
+  // 2. 扩展继承
   if (config.get<boolean>("inheritExtensions", true)) {
     const extPath = path.join(profileDir, "extensions.json");
     const parsedExts = await readExtensionsArray(extPath, profileName);
@@ -1997,6 +2185,26 @@ export async function removeCurrentProfileInheritedSettings(
   );
   await removeInheritedSettingsFromFile(currentProfilePath);
 
+  // 移除 mcp.json 中的继承块（MCP 服务器继承）
+  // ⚠️ 必须在扩展清理**之前**执行：扩展清理块在 extensions.json 不可读时会
+  // 提前 return，若 MCP 清理放在其后会被整体跳过（集成测试实测）。
+  try {
+    const mcpPath = path.join(currentProfileDirectory, "mcp.json");
+    const rawMcp = await readRawMcpFile(mcpPath);
+    const { cleaned, removedCount } = stripInheritedMcpBlocks(rawMcp);
+    if (removedCount > 0) {
+      console.info(
+        `Removing ${removedCount} inherited MCP server block(s) from \`${mcpPath}\`.`,
+      );
+      await writeManagedFile(mcpPath, cleaned + "\n");
+    }
+  } catch (err) {
+    console.warn(
+      `Failed to remove inherited MCP servers for profile \`${currentProfileName}\`:`,
+      err,
+    );
+  }
+
   // Also remove inherited extensions from the current profile's extensions.json
   try {
     const currentExtensionsPath = path.join(
@@ -2044,7 +2252,11 @@ export async function removeCurrentProfileInheritedSettings(
     const parsed = parseJSONC(raw) as Record<string, any>;
     let updated = raw;
     if (parsed?.inheritProfile) {
-      for (const key of ["_originallyOwnExtensions", "optedOutExtensions"] as const) {
+      for (const key of [
+        "_originallyOwnExtensions",
+        "optedOutExtensions",
+        "_optedOutMcpServers",
+      ] as const) {
         updated = applyEdits(
           updated,
           modify(updated, ["inheritProfile", key], undefined, options),
@@ -2052,7 +2264,11 @@ export async function removeCurrentProfileInheritedSettings(
       }
     }
     // 再删扁平 key（彻底清理，避免残留空数组污染用户 settings.json）
-    for (const key of ["inheritProfile._originallyOwnExtensions", "inheritProfile.optedOutExtensions"] as const) {
+    for (const key of [
+      "inheritProfile._originallyOwnExtensions",
+      "inheritProfile.optedOutExtensions",
+      "inheritProfile._optedOutMcpServers",
+    ] as const) {
       updated = applyEdits(
         updated,
         modify(updated, [key], undefined, options),

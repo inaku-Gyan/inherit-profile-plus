@@ -46,7 +46,7 @@ description: "Use when: 检查 VS Code 新版本兼容性、更新 engines.vscod
 
 - `@types/vscode` 在 npm 上的发布滞后于 VS Code 本体（2026-07-31 时 VS Code 1.131、类型包 1.125）
 - `submenuitem.Profiles` 分支是死代码（VS Code 1.127 起已从源码删除该键），见到可清理
-- `mcp.json`（Profile 级 MCP 配置）未被插件纳入继承，是已知功能缺口
+- `mcp.json`（Profile 级 MCP 配置）继承：✅ **已实现**（2026-10-23，见 `MCP继承设计.instructions.md`），开关 `inheritProfile.inheritMcp`
 - Profile 切换检测在 1.127+ 已不可靠（跟踪移入内部运行时状态），README 已声明，Force Reconcile 兜底
 
 ## Profile 扩展备份检查（每次打开本项目必须执行）

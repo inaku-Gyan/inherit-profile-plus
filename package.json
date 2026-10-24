@@ -102,6 +102,11 @@
           "default": true,
           "description": "Whether to inherit extensions from parent profiles."
         },
+        "inheritProfile.inheritMcp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to inherit MCP servers from parent profiles."
+        },
         "inheritProfile.runOnCurrentProfileSave": {
           "type": "boolean",
           "default": true,

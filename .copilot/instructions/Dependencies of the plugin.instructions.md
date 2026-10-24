@@ -83,11 +83,19 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 
 **验证方法**：搜索 `DISABLED_EXTENSIONS_STORAGE_PATH` 与 `ItemTable`。**这是最脆弱点之一**——VS Code 若把禁用状态改存别处（如直接写 extensions.json 的 `disabled` 字段），此模块失效。
 
-### 5. `mcp.json`（每个 Profile 目录内）— 🔴 高（功能缺口）
+### 5. `mcp.json`（每个 Profile 目录内）— 🔴 高
 
 **路径**：`<用户目录>/profiles/<id>/mcp.json`（`mcpResource`）
-**当前状态**：❌ **插件未继承此文件**。VS Code 将 MCP 服务器配置按 Profile 存储（源码：`mcpResource: joinPath(location, 'mcp.json')`，随 MCP 功能引入，约 1.95+），父 Profile 配置的 MCP 服务器不会同步到子 Profile。
-**建议**：若你的 Profile 分层使用 MCP，应评估将其纳入继承流程（或至少提供开关）。
+**当前状态**：✅ **已纳入继承**（2026-10-23，见 `.copilot/instructions/MCP继承设计.instructions.md`）。VS Code 将 MCP 服务器配置按 Profile 存储（源码：`mcpResource: joinPath(location, 'mcp.json')`，随 MCP 功能引入，约 1.95+）。
+
+| 依赖点 | 说明 |
+|--------|------|
+| 顶层 `servers` 对象 | `{ "servers": { "<name>": { type/command/args/env/cwd } } }` |
+| 继承块标记 | 复用 settings 的 `INHERITED SETTINGS MARKER START/END` 注释，块写在 `servers` 对象**内部** |
+| 台账 | `inheritProfile._optedOutMcpServers`（settings.json 扁平 key，已加入 `settingsSync.ignoredSettings`） |
+| 开关 | `inheritProfile.inheritMcp`（默认 `true`） |
+
+**⚠️ 与工作区级 MCP 的关系**：工作区级 `.vscode/mcp.json` / `.mcp.json` 优先级更高（`McpCollectionSortOrder.WorkspaceFolder = 0` vs `User = 200`），同名 server 由工作区遮蔽 Profile 级。工作区级跟项目走、所有 Profile 共享，**不在继承范围内**。
 
 ---
 
