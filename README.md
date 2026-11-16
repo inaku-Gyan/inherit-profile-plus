@@ -109,8 +109,9 @@ option:
 First, the extension will read the settings for each of the profiles you have elected to inherit from. It will then flatten each of the settings keys into a single string key and store it alongside its value. As the extension iterates through the different `settings.json` files from each inherited profile, it will override any existing settings with new ones. This is done according to the order that the profiles appear in in the `inheritProfile.parents` setting.
 
 > **Note**: A small set of well-known settings whose value is itself a JSON
-> object — for example `files.exclude`, `search.exclude`, and
-> `workbench.colorCustomizations` — are **not** flattened. The keys inside
+> object — for example `files.exclude`, `github.copilot.enable`,
+> `json.schemaDownload.trustedDomains`, and `workbench.colorCustomizations` —
+> are **not** flattened. The keys inside
 > these objects are user-defined data (glob patterns, colour identifiers,
 > etc.) rather than nested setting names, so flattening them would corrupt
 > the setting. These are instead inherited or overridden as a single, whole

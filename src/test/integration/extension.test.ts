@@ -539,6 +539,56 @@ suite("Extension integration", () => {
     );
   });
 
+  test("replaces flattened inherited Copilot and trusted-domain entries with intact maps", async () => {
+    const currentProfile: ProfileDescriptor = {
+      name: "Custom",
+      location: "custom-profile",
+    };
+
+    await writeStorage(sandboxRoot, currentProfile);
+    await writeProfileSettings(
+      sandboxRoot,
+      undefined,
+      JSON.stringify({
+        "github.copilot.enable": { "*": true },
+        "json.schemaDownload.trustedDomains": { "https://aka.ms": true },
+      }),
+    );
+    await writeProfileSettings(
+      sandboxRoot,
+      currentProfile,
+      `{
+    "editor.tabSize": 2,
+    ${INHERITED_SETTINGS_START_MARKER}
+    "github.copilot.enable.*": true,
+    "json.schemaDownload.trustedDomains.https://aka.ms": true,
+    ${INHERITED_SETTINGS_END_MARKER}
+    "${INHERITED_SETTINGS_INSERTION_BOUNDARY_KEY}": false
+}
+`,
+    );
+
+    await updateConfig("parents", ["Default"]);
+    await updateCurrentProfileInheritance(createContext(sandboxRoot));
+
+    const settingsPath = path.join(
+      getProfileDirectory(sandboxRoot, currentProfile),
+      "settings.json",
+    );
+    const updatedSettings = parse(await fs.readFile(settingsPath, "utf8"));
+
+    assert.strictEqual(updatedSettings["editor.tabSize"], 2);
+    assert.deepStrictEqual(updatedSettings["github.copilot.enable"], { "*": true });
+    assert.deepStrictEqual(updatedSettings["json.schemaDownload.trustedDomains"], {
+      "https://aka.ms": true,
+    });
+    assert.strictEqual(updatedSettings["github.copilot.enable.*"], undefined);
+    assert.strictEqual(
+      updatedSettings["json.schemaDownload.trustedDomains.https://aka.ms"],
+      undefined,
+    );
+  });
+
   test("does not inherit extensions when inheritExtensions is disabled", async () => {
     const currentProfile: ProfileDescriptor = {
       name: "Custom",

@@ -84,6 +84,28 @@ suite("profileSettings helpers", () => {
     );
   });
 
+  test("flattenSettings preserves the Copilot enable map in dotted and grouped settings", () => {
+    const value = { "*": true, markdown: false };
+    const expected = { "github.copilot.enable": value };
+
+    assert.deepStrictEqual(flattenSettings(expected), expected);
+    assert.deepStrictEqual(
+      flattenSettings({ github: { copilot: { enable: value } } }),
+      expected,
+    );
+  });
+
+  test("flattenSettings preserves literal URLs in the JSON schema trusted-domain map", () => {
+    const value = { "https://aka.ms": true };
+    const expected = { "json.schemaDownload.trustedDomains": value };
+
+    assert.deepStrictEqual(flattenSettings(expected), expected);
+    assert.deepStrictEqual(
+      flattenSettings({ json: { schemaDownload: { trustedDomains: value } } }),
+      expected,
+    );
+  });
+
   test("flattenSettings preserves every known non-flattenable setting as a single leaf entry", () => {
     for (const key of NON_FLATTENABLE_SETTINGS) {
       const value = { "some.dotted.data.key": true };

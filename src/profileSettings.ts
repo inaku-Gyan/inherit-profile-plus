@@ -138,6 +138,8 @@ export const NON_FLATTENABLE_SETTINGS: ReadonlySet<string> = new Set([
   "files.readonlyExclude",
   "files.associations",
   "search.exclude",
+  "github.copilot.enable",
+  "json.schemaDownload.trustedDomains",
   "workbench.editorAssociations",
   "workbench.colorCustomizations",
   "editor.tokenColorCustomizations",
